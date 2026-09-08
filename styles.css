@@ -112,26 +112,83 @@ select:focus {
   outline-offset: -1px;
 }
 
-.pairs-head,
-.pair-row {
+.field-label {
+  display: block;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.lot-count-field {
+  align-self: end;
+}
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+.stepper .btn {
+  width: 40px;
+  padding: 8px 0;
+  font-size: 1.05rem;
+  line-height: 1;
+}
+.stepper-value {
+  min-width: 2.2em;
+  font-size: 1.15rem;
+  font-weight: 700;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.prize-row {
   display: grid;
-  grid-template-columns: 1fr 1fr 40px;
+  grid-template-columns: 4.5em 1fr;
   gap: 8px;
   align-items: center;
-}
-.pairs-head {
-  font-size: 0.75rem;
-  color: var(--muted);
-  padding: 0 2px 4px;
-}
-.pair-row {
   margin-bottom: 8px;
 }
-.pair-row .pair-index {
-  display: none;
+.member-row {
+  display: grid;
+  grid-template-columns: 1fr 40px;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
 }
-.pair-row input[type="text"] {
+.prize-row input[type="text"],
+.member-row input[type="text"] {
   margin-top: 0;
+}
+.lot-tag {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--indigo-dark);
+  background: var(--indigo-light);
+  border-radius: 999px;
+  padding: 4px 0;
+  text-align: center;
+}
+
+.draw-bar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: var(--indigo-light);
+  border-radius: 10px;
+}
+.drawer-field {
+  min-width: 180px;
+  flex: 1;
+}
+.remaining {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--indigo-dark);
+  white-space: nowrap;
+  padding-bottom: 9px;
 }
 
 .icon-btn {
@@ -264,17 +321,40 @@ select:focus {
   dominant-baseline: middle;
   pointer-events: none;
 }
-.slot.is-active .slot-box {
-  fill: var(--indigo-light);
-  stroke: var(--indigo);
-  stroke-width: 2;
-}
 .slot.is-hidden .slot-text {
   fill: var(--muted);
 }
-.slot-top:hover .slot-box {
+
+/* まだ選ばれていないくじ：押せることが分かるようにする */
+.slot-top.is-open {
+  cursor: pointer;
+}
+.slot-top.is-open .slot-box {
+  fill: #f2f3f8;
+  stroke: #b9bfd4;
+  stroke-dasharray: 4 3;
+}
+.slot-top.is-open .slot-text {
+  fill: var(--muted);
+}
+.slot-top.is-open:hover .slot-box {
   fill: var(--indigo-light);
   stroke: var(--indigo);
+  stroke-dasharray: none;
+}
+
+/* 引かれたくじ：引いた人の名前が入る */
+.slot-top.is-drawn {
+  cursor: default;
+}
+.slot-top.is-drawn .slot-box {
+  fill: var(--indigo-light);
+  stroke: var(--indigo);
+  stroke-width: 2;
+  stroke-dasharray: none;
+}
+.slot-top.is-drawn .slot-text {
+  font-weight: 600;
 }
 
 /* ---- 結果一覧 ---- */
@@ -301,7 +381,11 @@ select:focus {
 }
 .result-name {
   font-weight: 600;
-  min-width: 6em;
+  min-width: 5em;
+}
+.result-lot {
+  font-size: 0.78rem;
+  color: var(--muted);
 }
 .result-arrow {
   color: var(--muted);

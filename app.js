@@ -1,8 +1,8 @@
 /*
  * あみだくじ
  *
- * 参加者と結果を入力すると、ランダムな横線を持つあみだくじを生成し、
- * SVG 上で道すじをたどって結果を決めます。
+ * くじの数と賞品を先に用意しておき、参加者が「まだ選ばれていないくじ」を
+ * 選ぶことで、そのくじの道すじがたどられ、賞品が判明します。
  *
  * データは通信せず、この端末の localStorage にのみ保存します。
  */
@@ -10,8 +10,8 @@
   "use strict";
 
   var STORAGE_KEY = "amidakuji.v1";
-  var MIN_LINES = 2;
-  var MAX_LINES = 20;
+  var MIN_LOTS = 2;
+  var MAX_LOTS = 20;
 
   // 横線の多さ（1行あたり、隣り合う縦線の間に線を引く確率）
   var DENSITY = { low: 0.22, normal: 0.36, high: 0.52 };
@@ -33,30 +33,31 @@
 
   var state = emptyState();
   var isSharedView = false;
-  var activeIndex = -1; // 直近にたどった参加者（強調表示用）
-  var revealed = []; // 結果を表示済みの参加者インデックス
+  var animateLot = -1; // 直近に引いたくじ（この1本だけアニメーションする）
 
   /* ---------- 状態 ---------- */
 
   function emptyState() {
     return {
       title: "",
-      pairs: [],
+      prizes: [], // 賞品名。長さがそのまま「くじの数」
+      members: [], // 参加者名（任意）
       density: "normal",
       rungs: [], // rungs[row][col] === 1 なら col 番目と col+1 番目の縦線を結ぶ横線
+      picks: [], // 引いた順に { lot: くじ番号, member: 参加者の添字 or null }
     };
   }
 
+  function lotCount() {
+    return state.prizes.length;
+  }
+
   function sampleState() {
-    var names = ["さとう", "すずき", "たかはし", "たなか", "いとう"];
-    var results = ["🍰 ケーキ", "☕ コーヒー", "🍫 チョコ", "🧃 ジュース", "🍪 クッキー"];
     var s = emptyState();
-    s.title = "おやつ争奪あみだ";
-    s.density = "normal";
-    s.pairs = names.map(function (n, i) {
-      return { name: n, result: results[i] };
-    });
-    s.rungs = generateRungs(s.pairs.length, s.density);
+    s.title = "おやつ争奪くじ";
+    s.prizes = ["🍰 ケーキ", "☕ コーヒー", "🍫 チョコ", "🧃 ジュース", "🍪 クッキー"];
+    s.members = ["さとう", "すずき", "たかはし", "たなか", "いとう"];
+    s.rungs = generateRungs(s.prizes.length, s.density);
     return s;
   }
 
@@ -86,31 +87,70 @@
     var s = emptyState();
     s.title = typeof data.title === "string" ? data.title : "";
     s.density = DENSITY[data.density] ? data.density : "normal";
-    s.pairs = Array.isArray(data.pairs)
-      ? data.pairs.slice(0, MAX_LINES).map(function (p) {
-          return {
-            name: p && typeof p.name === "string" ? p.name : "",
-            result: p && typeof p.result === "string" ? p.result : "",
-          };
-        })
-      : [];
-    if (isValidRungs(data.rungs, s.pairs.length)) {
+
+    if (Array.isArray(data.prizes) || Array.isArray(data.members)) {
+      s.prizes = toStrings(data.prizes).slice(0, MAX_LOTS);
+      s.members = toStrings(data.members).slice(0, s.prizes.length);
+    } else if (Array.isArray(data.pairs)) {
+      // 旧形式（参加者と結果を1対1で並べていた頃）からの移行
+      var pairs = data.pairs.slice(0, MAX_LOTS);
+      s.prizes = pairs.map(function (p) {
+        return p && typeof p.result === "string" ? p.result : "";
+      });
+      s.members = pairs.map(function (p) {
+        return p && typeof p.name === "string" ? p.name : "";
+      });
+    }
+
+    if (isValidRungs(data.rungs, s.prizes.length)) {
       s.rungs = data.rungs.map(function (row) {
         return row.map(function (v) {
           return v ? 1 : 0;
         });
       });
-    } else if (s.pairs.length >= MIN_LINES) {
-      s.rungs = generateRungs(s.pairs.length, s.density);
+    } else if (s.prizes.length >= MIN_LOTS) {
+      s.rungs = generateRungs(s.prizes.length, s.density);
     }
+
+    s.picks = normalizePicks(data.picks, s.prizes.length, s.members.length);
     return s;
   }
 
-  function isValidRungs(rungs, lineCount) {
+  function toStrings(arr) {
+    return Array.isArray(arr)
+      ? arr.map(function (v) {
+          return typeof v === "string" ? v : "";
+        })
+      : [];
+  }
+
+  // 1つのくじ／1人の参加者が二重に使われていないものだけ残す
+  function normalizePicks(picks, lots, memberCount) {
+    if (!Array.isArray(picks)) return [];
+    var usedLots = [];
+    var usedMembers = [];
+    var out = [];
+    picks.forEach(function (p) {
+      if (!p || typeof p.lot !== "number") return;
+      var lot = Math.floor(p.lot);
+      if (lot < 0 || lot >= lots || usedLots.indexOf(lot) !== -1) return;
+      var member = typeof p.member === "number" ? Math.floor(p.member) : null;
+      if (member === null || member < 0 || member >= memberCount || usedMembers.indexOf(member) !== -1) {
+        member = null;
+      } else {
+        usedMembers.push(member);
+      }
+      usedLots.push(lot);
+      out.push({ lot: lot, member: member });
+    });
+    return out;
+  }
+
+  function isValidRungs(rungs, lots) {
     if (!Array.isArray(rungs) || rungs.length === 0) return false;
-    if (lineCount < MIN_LINES) return false;
+    if (lots < MIN_LOTS) return false;
     for (var r = 0; r < rungs.length; r++) {
-      if (!Array.isArray(rungs[r]) || rungs[r].length !== lineCount - 1) return false;
+      if (!Array.isArray(rungs[r]) || rungs[r].length !== lots - 1) return false;
       for (var c = 0; c < rungs[r].length - 1; c++) {
         // 同じ行で横線が隣り合うと道すじが決まらないので不正扱い
         if (rungs[r][c] && rungs[r][c + 1]) return false;
@@ -121,16 +161,16 @@
 
   /* ---------- あみだの生成 ---------- */
 
-  function generateRungs(lineCount, density) {
-    if (lineCount < MIN_LINES) return [];
-    var rows = Math.max(8, lineCount * 2);
+  function generateRungs(lots, density) {
+    if (lots < MIN_LOTS) return [];
+    var rows = Math.max(8, lots * 2);
     var p = DENSITY[density] || DENSITY.normal;
     var rungs = [];
     var r, c;
 
     for (r = 0; r < rows; r++) {
       var row = [];
-      for (c = 0; c < lineCount - 1; c++) {
+      for (c = 0; c < lots - 1; c++) {
         // 直前の列に横線があると隣接してしまうため、そこには引かない
         row.push(!row[c - 1] && Math.random() < p ? 1 : 0);
       }
@@ -138,7 +178,7 @@
     }
 
     // どの縦線どうしも最低1本はつながるようにする（一直線に落ちる列をなくす）
-    for (c = 0; c < lineCount - 1; c++) {
+    for (c = 0; c < lots - 1; c++) {
       var used = rungs.some(function (row) {
         return row[c] === 1;
       });
@@ -169,8 +209,9 @@
   }
 
   function regenerate() {
-    state.rungs = generateRungs(state.pairs.length, state.density);
-    clearReveals();
+    state.rungs = generateRungs(lotCount(), state.density);
+    state.picks = [];
+    animateLot = -1;
   }
 
   /* ---------- 道すじの計算 ---------- */
@@ -197,11 +238,17 @@
   function x(col) {
     return PAD_X + colGap / 2 + col * colGap;
   }
+  function rungY(row) {
+    return LADDER_TOP + (row + 1) * ROW_GAP;
+  }
+  function ladderBottom() {
+    return LADDER_TOP + (state.rungs.length + 1) * ROW_GAP;
+  }
 
   // 縦線が画面内に収まるように列幅を決める（狭すぎるとラベルが読めないので下限あり）
   function updateColGap() {
     var wrap = document.getElementById("ladderWrap");
-    var n = state.pairs.length;
+    var n = lotCount();
     if (!wrap || n < 1) {
       colGap = COL_GAP_MAX;
       return;
@@ -210,11 +257,53 @@
     if (avail <= 0) avail = COL_GAP_MAX * n;
     colGap = Math.max(COL_GAP_MIN, Math.min(COL_GAP_MAX, Math.floor(avail / n)));
   }
-  function rungY(row) {
-    return LADDER_TOP + (row + 1) * ROW_GAP;
+
+  /* ---------- くじの状態 ---------- */
+
+  function pickOfLot(lot) {
+    for (var i = 0; i < state.picks.length; i++) {
+      if (state.picks[i].lot === lot) return state.picks[i];
+    }
+    return null;
   }
-  function ladderBottom() {
-    return LADDER_TOP + (state.rungs.length + 1) * ROW_GAP;
+
+  function isDrawn(lot) {
+    return pickOfLot(lot) !== null;
+  }
+
+  function remainingLots() {
+    var out = [];
+    for (var i = 0; i < lotCount(); i++) if (!isDrawn(i)) out.push(i);
+    return out;
+  }
+
+  // まだ引いていない参加者の添字
+  function remainingMembers() {
+    var used = state.picks
+      .map(function (p) {
+        return p.member;
+      })
+      .filter(function (m) {
+        return m !== null;
+      });
+    var out = [];
+    for (var i = 0; i < state.members.length; i++) {
+      if (used.indexOf(i) === -1) out.push(i);
+    }
+    return out;
+  }
+
+  function prizeOf(lot) {
+    return (state.prizes[lot] || "").trim() || "賞品" + (lot + 1);
+  }
+  function memberName(index) {
+    return (state.members[index] || "").trim() || "参加者" + (index + 1);
+  }
+  function lotLabel(lot) {
+    return "くじ" + (lot + 1);
+  }
+  function pickLabel(pick) {
+    return pick.member === null ? lotLabel(pick.lot) : memberName(pick.member);
   }
 
   /* ---------- 描画 ---------- */
@@ -230,47 +319,68 @@
   }
 
   function renderAll() {
-    renderPairs();
+    renderPrizes();
+    renderMembers();
     renderLadder(-1);
     renderResults();
     syncControls();
   }
 
-  function renderPairs() {
-    var box = document.getElementById("pairsContainer");
+  function renderPrizes() {
+    var box = document.getElementById("prizesContainer");
     box.innerHTML = "";
-    if (state.pairs.length === 0) {
-      var p = document.createElement("p");
-      p.className = "empty";
-      p.textContent = "「＋ 1人ぶん追加」で参加者と結果を登録してください。";
-      box.appendChild(p);
+    if (lotCount() === 0) {
+      box.appendChild(emptyMessage("「＋」でくじの数を決めると、賞品の入力欄が出ます。"));
       return;
     }
-    state.pairs.forEach(function (pair, i) {
+    state.prizes.forEach(function (prize, i) {
       var row = document.createElement("div");
-      row.className = "pair-row";
+      row.className = "prize-row";
 
-      var name = document.createElement("input");
-      name.type = "text";
-      name.value = pair.name;
-      name.placeholder = "参加者" + (i + 1);
-      name.setAttribute("aria-label", (i + 1) + "人目の参加者名");
-      name.addEventListener("input", function () {
-        state.pairs[i].name = name.value;
+      // 賞品は「あみだの下端の左から何番目か」で並ぶ。上端のくじ番号とは対応しない
+      var tag = document.createElement("span");
+      tag.className = "lot-tag";
+      tag.textContent = i + 1 + "番目";
+
+      var input = document.createElement("input");
+      input.type = "text";
+      input.value = prize;
+      input.placeholder = "賞品" + (i + 1);
+      input.setAttribute("aria-label", i + 1 + "番目の賞品");
+      input.addEventListener("input", function () {
+        state.prizes[i] = input.value;
         renderLadder(-1);
         renderResults();
         save();
       });
 
-      var result = document.createElement("input");
-      result.type = "text";
-      result.value = pair.result;
-      result.placeholder = "結果" + (i + 1);
-      result.setAttribute("aria-label", (i + 1) + "番目の結果");
-      result.addEventListener("input", function () {
-        state.pairs[i].result = result.value;
+      row.appendChild(tag);
+      row.appendChild(input);
+      box.appendChild(row);
+    });
+  }
+
+  function renderMembers() {
+    var box = document.getElementById("membersContainer");
+    box.innerHTML = "";
+    if (state.members.length === 0) {
+      box.appendChild(emptyMessage("「＋ 名前を追加」で参加者を登録できます（未登録でも引けます）。"));
+      return;
+    }
+    state.members.forEach(function (name, i) {
+      var row = document.createElement("div");
+      row.className = "member-row";
+
+      var input = document.createElement("input");
+      input.type = "text";
+      input.value = name;
+      input.placeholder = "参加者" + (i + 1);
+      input.setAttribute("aria-label", (i + 1) + "人目の名前");
+      input.addEventListener("input", function () {
+        state.members[i] = input.value;
         renderLadder(-1);
         renderResults();
+        syncControls();
         save();
       });
 
@@ -278,27 +388,23 @@
       del.type = "button";
       del.className = "icon-btn";
       del.textContent = "✕";
-      del.title = "この行を削除";
-      del.setAttribute("aria-label", (i + 1) + "行目を削除");
+      del.title = "この名前を削除";
+      del.setAttribute("aria-label", (i + 1) + "人目を削除");
       del.addEventListener("click", function () {
-        state.pairs.splice(i, 1);
-        regenerate();
-        renderAll();
-        save();
+        removeMember(i);
       });
 
-      row.appendChild(name);
-      row.appendChild(result);
+      row.appendChild(input);
       row.appendChild(del);
       box.appendChild(row);
     });
   }
 
-  function nameOf(i) {
-    return state.pairs[i].name.trim() || "参加者" + (i + 1);
-  }
-  function resultOf(i) {
-    return state.pairs[i].result.trim() || "結果" + (i + 1);
+  function emptyMessage(text) {
+    var p = document.createElement("p");
+    p.className = "empty";
+    p.textContent = text;
+    return p;
   }
 
   function renderLadder(animateIndex) {
@@ -307,18 +413,22 @@
     svg.innerHTML = "";
     updateColGap();
 
-    var n = state.pairs.length;
-    if (n < MIN_LINES || state.rungs.length === 0) {
+    var n = lotCount();
+    if (n < MIN_LOTS || state.rungs.length === 0) {
       svg.setAttribute("viewBox", "0 0 320 80");
       svg.setAttribute("width", "320");
       svg.setAttribute("height", "80");
-      svg.appendChild(
-        el("text", { x: 160, y: 44, class: "slot-text", "font-size": 14 })
-      ).textContent = "参加者を2人以上登録するとあみだが表示されます";
-      hint.textContent = "参加者を2人以上登録してください。";
+      var msg = el("text", { x: 160, y: 44, class: "slot-text" });
+      msg.textContent = "くじの数を2以上にすると表示されます";
+      svg.appendChild(msg);
+      hint.textContent = "「くじの数」を2以上にしてください。";
       return;
     }
-    hint.textContent = "参加者名をタップすると、その人の道すじをたどります。";
+
+    var left = remainingLots().length;
+    hint.textContent = left > 0
+      ? "まだ選ばれていないくじ（グレーの「くじ◯」）をタップすると、道すじをたどって賞品が判明します。"
+      : "すべてのくじが引かれました。";
 
     var w = PAD_X * 2 + n * colGap;
     var bottom = ladderBottom();
@@ -343,28 +453,65 @@
       });
     });
 
-    // 道すじ（表示済みのぶん）を先に描く。直近の1本だけ最後にアニメーションで描く
+    // 道すじ（引かれたぶん）。直近の1本だけ最後にアニメーションで描く
     var traceLayer = el("g", { id: "traceLayer" });
     svg.appendChild(traceLayer);
-    revealed.forEach(function (i) {
-      if (i !== animateIndex) drawTrace(traceLayer, i, false);
+    state.picks.forEach(function (p, order) {
+      if (p.lot !== animateIndex) drawTrace(traceLayer, p.lot, order, false);
     });
-    if (revealed.indexOf(animateIndex) !== -1) drawTrace(traceLayer, animateIndex, true);
+    var animated = pickOfLot(animateIndex);
+    if (animated) {
+      drawTrace(traceLayer, animated.lot, state.picks.indexOf(animated), true);
+    }
 
-    // 上（参加者）と下（結果）のラベル。結果は、道すじが到達した列だけ見えるようにする
-    var openCols = revealedEndCols();
+    // 上（くじ）と下（賞品）のラベル
+    var openCols = state.picks.map(function (p) {
+      return trace(p.lot).endCol;
+    });
     var inner = colGap - 20; // ラベルに使える横幅
     for (var i2 = 0; i2 < n; i2++) {
-      var top = makeSlot(i2, nameOf(i2), 24, true);
+      var pick = pickOfLot(i2);
+      var topLabel = pick ? pickLabel(pick) : lotLabel(i2);
+      var top = makeTopSlot(i2, topLabel, pick);
       svg.appendChild(top);
-      fitSlotText(top, nameOf(i2), inner);
+      fitSlotText(top, topLabel, inner);
 
       var open = openCols.indexOf(i2) !== -1;
-      var label = open ? resultOf(i2) : "？";
-      var btm = makeSlot(i2, label, bottom + BOX_H / 2 + 10, false, open);
+      var label = open ? prizeOf(i2) : "？";
+      var btm = makeBottomSlot(i2, label, bottom + BOX_H / 2 + 10, open);
       svg.appendChild(btm);
       fitSlotText(btm, label, inner);
     }
+  }
+
+  function makeSlotGroup(index, label, cy, className) {
+    var g = el("g", { class: className });
+    var bw = colGap - 12;
+    g.appendChild(
+      el("rect", { class: "slot-box", x: x(index) - bw / 2, y: cy - BOX_H / 2, width: bw, height: BOX_H, rx: 7 })
+    );
+    var text = el("text", { class: "slot-text", x: x(index), y: cy + 1 });
+    text.textContent = label;
+    g.appendChild(text);
+    var title = el("title");
+    title.textContent = label;
+    g.appendChild(title);
+    return g;
+  }
+
+  function makeTopSlot(lot, label, pick) {
+    var cls = "slot slot-top" + (pick ? " is-drawn" : " is-open");
+    var g = makeSlotGroup(lot, label, 24, cls);
+    if (!pick) {
+      g.addEventListener("click", function () {
+        drawLot(lot);
+      });
+    }
+    return g;
+  }
+
+  function makeBottomSlot(lot, label, cy, open) {
+    return makeSlotGroup(lot, label, cy, "slot slot-bottom" + (open ? "" : " is-hidden"));
   }
 
   // ラベルが枠に収まるまで、文字を少し小さくし、それでも溢れる場合だけ末尾を省略する
@@ -383,49 +530,16 @@
     }
   }
 
-  // 表示済みの参加者がたどり着いた「結果」の列
-  function revealedEndCols() {
-    return revealed.map(function (i) {
-      return trace(i).endCol;
-    });
-  }
-
-  function makeSlot(index, label, cy, isTop, isOpen) {
-    var g = el("g", { class: "slot " + (isTop ? "slot-top" : "slot-bottom") });
-    var bw = colGap - 12;
-    g.appendChild(
-      el("rect", { class: "slot-box", x: x(index) - bw / 2, y: cy - BOX_H / 2, width: bw, height: BOX_H, rx: 7 })
-    );
-    var text = el("text", { class: "slot-text", x: x(index), y: cy + 1 });
-    text.textContent = label;
-    g.appendChild(text);
-
-    if (isTop) {
-      if (index === activeIndex) g.setAttribute("class", g.getAttribute("class") + " is-active");
-      var title = el("title");
-      title.textContent = label;
-      g.appendChild(title);
-      g.addEventListener("click", function () {
-        revealOne(index);
-      });
-    } else if (!isOpen) {
-      g.setAttribute("class", g.getAttribute("class") + " is-hidden");
-    }
-    return g;
-  }
-
-  function drawTrace(layer, index, animate) {
-    var path = trace(index);
+  function drawTrace(layer, lot, order, animate) {
+    var path = trace(lot);
     var d = path.points
       .map(function (pt, i) {
         return (i === 0 ? "M" : "L") + pt[0] + " " + pt[1];
       })
       .join(" ");
-    var node = el("path", {
-      class: "trace-path",
-      d: d,
-      stroke: TRACE_COLORS[index % TRACE_COLORS.length],
-    });
+    var node = el("path", { class: "trace-path", d: d });
+    // CSS の stroke 指定より優先させるため style で色を付ける
+    node.style.stroke = TRACE_COLORS[Math.max(0, order) % TRACE_COLORS.length];
     layer.appendChild(node);
     if (animate) {
       var len = node.getTotalLength();
@@ -435,95 +549,163 @@
       node.classList.add("animating");
       node.style.strokeDashoffset = 0;
     }
-    return path.endCol;
   }
 
   function renderResults() {
     var box = document.getElementById("resultsContainer");
     box.innerHTML = "";
-    if (revealed.length === 0) return;
+    if (state.picks.length === 0) return;
 
     var list = document.createElement("div");
     list.className = "result-list";
-    revealed
-      .slice()
-      .sort(function (a, b) {
-        return a - b;
-      })
-      .forEach(function (i) {
-        var endCol = trace(i).endCol;
-        var item = document.createElement("div");
-        item.className = "result-item" + (i === activeIndex ? " is-active" : "");
-        item.innerHTML =
-          '<span class="result-name"></span><span class="result-arrow">→</span><span class="result-value"></span>';
-        item.querySelector(".result-name").textContent = nameOf(i);
-        item.querySelector(".result-value").textContent = resultOf(endCol);
-        list.appendChild(item);
-      });
+    state.picks.forEach(function (p) {
+      var item = document.createElement("div");
+      item.className = "result-item" + (p.lot === animateLot ? " is-active" : "");
+      item.innerHTML =
+        '<span class="result-name"></span><span class="result-lot"></span>' +
+        '<span class="result-arrow">→</span><span class="result-value"></span>';
+      item.querySelector(".result-name").textContent = pickLabel(p);
+      item.querySelector(".result-lot").textContent =
+        p.member === null ? "" : "（" + lotLabel(p.lot) + "）";
+      item.querySelector(".result-value").textContent = prizeOf(trace(p.lot).endCol);
+      list.appendChild(item);
+    });
     box.appendChild(list);
   }
 
   function syncControls() {
-    var n = state.pairs.length;
-    document.getElementById("addRowBtn").disabled = n >= MAX_LINES;
-    document.getElementById("regenerateBtn").disabled = n < MIN_LINES;
-    document.getElementById("revealAllBtn").disabled = n < MIN_LINES;
-    document.getElementById("hideAllBtn").disabled = revealed.length === 0;
-    document.getElementById("shuffleResultsBtn").disabled = n < MIN_LINES;
+    var n = lotCount();
+    var left = remainingLots().length;
+
+    document.getElementById("lotCountValue").textContent = n;
+    document.getElementById("lotMinusBtn").disabled = n <= 0;
+    document.getElementById("lotPlusBtn").disabled = n >= MAX_LOTS;
+    document.getElementById("addMemberBtn").disabled = state.members.length >= Math.max(n, 1) || n === 0;
+    document.getElementById("regenerateBtn").disabled = n < MIN_LOTS;
+    document.getElementById("shufflePrizesBtn").disabled = n < MIN_LOTS;
+    document.getElementById("revealRestBtn").disabled = n < MIN_LOTS || left === 0;
+    document.getElementById("resetDrawsBtn").disabled = state.picks.length === 0;
     document.getElementById("densitySelect").value = state.density;
     document.getElementById("lotteryTitle").value = state.title;
+
+    var remaining = document.getElementById("remainingLabel");
+    remaining.textContent = n < MIN_LOTS ? "" : "残り " + left + " / " + n + " 本";
+
+    renderDrawerSelect();
+  }
+
+  // 「次に引く人」の候補。未登録・全員引き終わりのときは「名前なし」だけになる
+  function renderDrawerSelect() {
+    var select = document.getElementById("drawerSelect");
+    var previous = select.value;
+    select.innerHTML = "";
+    remainingMembers().forEach(function (i) {
+      var opt = document.createElement("option");
+      opt.value = String(i);
+      opt.textContent = memberName(i);
+      select.appendChild(opt);
+    });
+    var none = document.createElement("option");
+    none.value = "none";
+    none.textContent = "名前なし";
+    select.appendChild(none);
+
+    // 直前に選んでいた人がまだ引いていなければ維持し、そうでなければ次の人に送る。
+    // 「名前なし」は引き継がない（引くたびに次の人が既定になるように）
+    var kept =
+      previous !== "" &&
+      previous !== "none" &&
+      Array.prototype.some.call(select.options, function (o) {
+        return o.value === previous;
+      });
+    select.value = kept ? previous : select.options[0].value;
+  }
+
+  function currentDrawer() {
+    var v = document.getElementById("drawerSelect").value;
+    return v === "none" || v === "" ? null : Number(v);
   }
 
   /* ---------- 操作 ---------- */
 
-  function addRow() {
-    if (state.pairs.length >= MAX_LINES) return;
-    state.pairs.push({ name: "", result: "" });
+  function setLotCount(next) {
+    var n = Math.max(0, Math.min(MAX_LOTS, next));
+    if (n === lotCount()) return;
+    if (state.picks.length > 0 && !confirm("くじの数を変えると、引いた結果はリセットされます。よろしいですか？")) {
+      return;
+    }
+    while (state.prizes.length < n) state.prizes.push("");
+    state.prizes.length = n;
+    if (state.members.length > n) state.members.length = n;
     regenerate();
     renderAll();
     save();
   }
 
-  function clearReveals() {
-    revealed = [];
-    activeIndex = -1;
-  }
-
-  function revealOne(index) {
-    activeIndex = index;
-    if (revealed.indexOf(index) === -1) revealed.push(index);
-    renderLadder(index);
-    renderResults();
+  function addMember() {
+    if (state.members.length >= lotCount()) return;
+    state.members.push("");
+    renderMembers();
     syncControls();
+    save();
   }
 
-  function revealAll() {
-    revealed = state.pairs.map(function (_, i) {
-      return i;
-    });
-    activeIndex = -1;
-    renderLadder(-1);
-    renderResults();
-    syncControls();
-  }
-
-  function hideAll() {
-    clearReveals();
-    renderLadder(-1);
-    renderResults();
-    syncControls();
-  }
-
-  function shuffleResults() {
-    var values = shuffled(
-      state.pairs.map(function (p) {
-        return p.result;
+  function removeMember(index) {
+    // 削除した人が引いていたくじは未選択に戻し、以降の添字をずらす
+    state.picks = state.picks
+      .filter(function (p) {
+        return p.member !== index;
       })
-    );
-    state.pairs.forEach(function (p, i) {
-      p.result = values[i];
+      .map(function (p) {
+        if (p.member !== null && p.member > index) return { lot: p.lot, member: p.member - 1 };
+        return p;
+      });
+    state.members.splice(index, 1);
+    animateLot = -1;
+    renderAll();
+    save();
+  }
+
+  function drawLot(lot) {
+    if (isDrawn(lot)) return;
+    var member = currentDrawer();
+    if (member !== null && remainingMembers().indexOf(member) === -1) member = null;
+    state.picks.push({ lot: lot, member: member });
+    animateLot = lot;
+    renderLadder(lot);
+    renderResults();
+    syncControls();
+    save();
+  }
+
+  // 残ったくじを一気に開く（引く人は割り当てず、くじ番号のまま表示する）
+  function revealRest() {
+    remainingLots().forEach(function (lot) {
+      state.picks.push({ lot: lot, member: null });
     });
-    clearReveals();
+    animateLot = -1;
+    renderLadder(-1);
+    renderResults();
+    syncControls();
+    save();
+  }
+
+  function resetDraws() {
+    if (state.picks.length === 0) return;
+    if (!confirm("引いた結果をすべて取り消します。よろしいですか？")) return;
+    state.picks = [];
+    animateLot = -1;
+    renderAll();
+    save();
+  }
+
+  function shufflePrizes() {
+    if (state.picks.length > 0 && !confirm("賞品を並べ替えると、引いた結果はリセットされます。よろしいですか？")) {
+      return;
+    }
+    state.prizes = shuffled(state.prizes);
+    state.picks = [];
+    animateLot = -1;
     renderAll();
     save();
   }
@@ -557,8 +739,8 @@
   }
 
   function createShareLink() {
-    if (state.pairs.length < MIN_LINES) {
-      alert("共有するデータがありません。参加者を2人以上登録してください。");
+    if (lotCount() < MIN_LOTS) {
+      alert("共有するデータがありません。くじの数を2以上にしてください。");
       return;
     }
     var url = location.href.split("#")[0] + "#view=" + encodePayload(state);
@@ -612,7 +794,7 @@
         return;
       }
       state = loaded;
-      clearReveals();
+      animateLot = -1;
       renderAll();
       save();
     };
@@ -630,21 +812,30 @@
       state.title = e.target.value;
       save();
     });
+    document.getElementById("lotPlusBtn").addEventListener("click", function () {
+      setLotCount(lotCount() === 0 ? MIN_LOTS : lotCount() + 1);
+    });
+    document.getElementById("lotMinusBtn").addEventListener("click", function () {
+      setLotCount(lotCount() <= MIN_LOTS ? 0 : lotCount() - 1);
+    });
     document.getElementById("densitySelect").addEventListener("change", function (e) {
       state.density = e.target.value;
       regenerate();
       renderAll();
       save();
     });
-    document.getElementById("addRowBtn").addEventListener("click", addRow);
-    document.getElementById("shuffleResultsBtn").addEventListener("click", shuffleResults);
+    document.getElementById("shufflePrizesBtn").addEventListener("click", shufflePrizes);
+    document.getElementById("addMemberBtn").addEventListener("click", addMember);
     document.getElementById("regenerateBtn").addEventListener("click", function () {
+      if (state.picks.length > 0 && !confirm("くじを作り直すと、引いた結果はリセットされます。よろしいですか？")) {
+        return;
+      }
       regenerate();
       renderAll();
       save();
     });
-    document.getElementById("revealAllBtn").addEventListener("click", revealAll);
-    document.getElementById("hideAllBtn").addEventListener("click", hideAll);
+    document.getElementById("revealRestBtn").addEventListener("click", revealRest);
+    document.getElementById("resetDrawsBtn").addEventListener("click", resetDraws);
     document.getElementById("shareBtn").addEventListener("click", createShareLink);
     document.getElementById("copyShareBtn").addEventListener("click", function () {
       var input = document.getElementById("shareUrl");
@@ -652,9 +843,9 @@
       copyText(input.value);
     });
     document.getElementById("sampleBtn").addEventListener("click", function () {
-      if (state.pairs.length > 0 && !confirm("今の内容をサンプルデータで置き換えます。よろしいですか？")) return;
+      if (lotCount() > 0 && !confirm("今の内容をサンプルデータで置き換えます。よろしいですか？")) return;
       state = sampleState();
-      clearReveals();
+      animateLot = -1;
       renderAll();
       save();
     });
@@ -669,7 +860,7 @@
     document.getElementById("resetBtn").addEventListener("click", function () {
       if (!confirm("すべての内容を消去します。よろしいですか？")) return;
       state = emptyState();
-      clearReveals();
+      animateLot = -1;
       renderAll();
       save();
     });

@@ -10,7 +10,7 @@
 <body>
   <header class="app-header">
     <h1>🎋 あみだくじ</h1>
-    <p class="subtitle">参加者と結果を入れるだけ。線をたどるアニメーションで公平に決まります</p>
+    <p class="subtitle">くじの数と賞品を用意し、未選択のくじを選ぶと結果が判明します</p>
   </header>
 
   <main>
@@ -20,34 +20,29 @@
       <button class="btn small" id="editHereBtn">この内容を編集する（自分の端末に保存）</button>
     </div>
 
-    <!-- くじの情報 -->
+    <!-- くじの設定 -->
     <section class="card">
-      <h2>くじの情報</h2>
+      <h2>① くじの設定</h2>
       <div class="event-fields">
         <label>タイトル
-          <input type="text" id="lotteryTitle" placeholder="例：新年会の席順決め" />
+          <input type="text" id="lotteryTitle" placeholder="例：新年会の景品くじ" />
         </label>
-      </div>
-    </section>
-
-    <!-- 参加者と結果 -->
-    <section class="card">
-      <div class="section-head">
-        <h2>参加者と結果</h2>
-        <button class="btn primary" id="addRowBtn">＋ 1人ぶん追加</button>
+        <div class="lot-count-field">
+          <span class="field-label">くじの数</span>
+          <div class="stepper">
+            <button type="button" class="btn small" id="lotMinusBtn" aria-label="くじの数を減らす">−</button>
+            <span class="stepper-value" id="lotCountValue">0</span>
+            <button type="button" class="btn small" id="lotPlusBtn" aria-label="くじの数を増やす">＋</button>
+          </div>
+        </div>
       </div>
       <p class="hint">
-        左に<strong>参加者名</strong>、右に<strong>結果（景品・当番・席番号など）</strong>を入力します。
-        入力欄の数はそのまま縦線の本数になります（2〜20）。
+        くじの数がそのまま縦線の本数になります（2〜20）。賞品はあみだの<strong>下端に左から順に</strong>並びます。
+        どのくじがどの賞品につながるかは線をたどって決まるので、この並び順のままにはなりません。
       </p>
-      <div class="pairs-head">
-        <span>参加者</span>
-        <span>結果</span>
-        <span></span>
-      </div>
-      <div id="pairsContainer"></div>
+      <div id="prizesContainer"></div>
       <div class="shuffle-row">
-        <button class="btn" id="shuffleResultsBtn">🔀 結果だけシャッフル</button>
+        <button class="btn" id="shufflePrizesBtn">🔀 賞品の並びをシャッフル</button>
         <label class="lines-field">横線の多さ
           <select id="densitySelect">
             <option value="low">少なめ</option>
@@ -58,19 +53,38 @@
       </div>
     </section>
 
+    <!-- 参加者 -->
+    <section class="card">
+      <div class="section-head">
+        <h2>② 参加者（任意）</h2>
+        <button class="btn primary" id="addMemberBtn">＋ 名前を追加</button>
+      </div>
+      <p class="hint">
+        名前を登録しておくと、くじを選んだときに「誰が引いたか」が結果に残ります。
+        登録しなくても、くじ番号のまま引けます。
+      </p>
+      <div id="membersContainer"></div>
+    </section>
+
     <!-- あみだ -->
     <section class="card">
       <div class="section-head">
-        <h2>あみだくじ</h2>
-        <button class="btn primary" id="regenerateBtn">🎲 くじを作り直す</button>
+        <h2>③ くじを引く</h2>
+        <button class="btn" id="regenerateBtn">🎲 くじを作り直す</button>
       </div>
-      <p class="hint" id="ladderHint">参加者名をタップすると、その人の道すじをたどります。</p>
+      <div class="draw-bar" id="drawBar">
+        <label class="drawer-field">次に引く人
+          <select id="drawerSelect"></select>
+        </label>
+        <span class="remaining" id="remainingLabel"></span>
+      </div>
+      <p class="hint" id="ladderHint"></p>
       <div class="ladder-wrap" id="ladderWrap">
         <svg id="ladder" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="あみだくじ"></svg>
       </div>
       <div class="tool-buttons">
-        <button class="btn primary" id="revealAllBtn">✨ 全員の結果を表示</button>
-        <button class="btn" id="hideAllBtn">結果を隠す</button>
+        <button class="btn primary" id="revealRestBtn">✨ 残りのくじをすべて開く</button>
+        <button class="btn" id="resetDrawsBtn">結果をリセット（引き直す）</button>
       </div>
       <div id="resultsContainer"></div>
     </section>
