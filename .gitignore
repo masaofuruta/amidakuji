@@ -1,0 +1,10 @@
+# macOS
+.DS_Store
+
+# エディタ
+.vscode/
+.idea/
+
+# ログ・一時ファイル
+*.log
+node_modules/
